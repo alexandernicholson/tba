@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: tba-system
+labels:
+  - pairs:
+      app.kubernetes.io/name: tba
+      app.kubernetes.io/part-of: tba
+      app.kubernetes.io/managed-by: kustomize
+resources:
+  - namespace.yaml
+  - crd.yaml
+  - rbac.yaml
+  - deployment.yaml
+images:
+  - name: ghcr.io/alexandernicholson/tba
+    newTag: latest

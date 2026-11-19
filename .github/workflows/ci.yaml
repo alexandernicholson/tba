@@ -1,0 +1,192 @@
+name: ci
+
+# Only GitHub-owned actions (actions/*) are used; tools are installed with
+# rustup, cargo, apt or curl, and images are built with the runner's Docker and
+# pushed to GitHub Container Registry.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    # Weekly, to pick up new Kubernetes pre-releases and advisories.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  KIND_VERSION: v0.33.0
+  IMAGE: ghcr.io/alexandernicholson/tba
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: lint-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - run: cargo fmt --check
+      # pedantic + nursery lints are enabled in Cargo.toml; unsafe code is forbidden.
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - name: deploy/crd.yaml is generated from the Rust types
+        run: cargo run --quiet --locked -- crd | diff -u deploy/crd.yaml -
+
+  msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.95 --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: msrv-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - run: cargo +1.95 check --all-targets --locked
+
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --component llvm-tools-preview && rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-llvm-cov
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: coverage-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - run: command -v cargo-llvm-cov || cargo install cargo-llvm-cov --locked
+      - name: Tests with 100% line and function coverage
+        run: scripts/coverage.sh
+
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ runner.os }}
+      - run: command -v cargo-deny || cargo install cargo-deny --locked
+      - run: cargo deny check
+
+  bench:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: bench-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - run: sudo apt-get update && sudo apt-get install --yes hyperfine
+      - run: scripts/bench.sh
+      - run: cat docs/benchmarks.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks
+          path: |
+            docs/benchmarks.md
+            target/benchmarks.json
+
+  e2e-image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --tag "$IMAGE:e2e" .
+      - run: docker save "$IMAGE:e2e" --output /tmp/image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e2e-image
+          path: /tmp/image.tar
+          retention-days: 1
+
+  e2e:
+    needs: e2e-image
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every Kubernetes minor released in the last two years, plus the
+        # newest pre-release (resolved at run time).
+        kubernetes: [v1.32.11, v1.33.12, v1.34.11, v1.35.8, v1.36.4, v1.37.0, prerelease]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-image
+          path: /tmp
+      - run: docker load --input /tmp/image.tar
+      - name: Install kind
+        run: |
+          curl -fsSLo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          chmod +x /usr/local/bin/kind
+      - name: Resolve node image
+        id: node
+        run: |
+          if [[ "${{ matrix.kubernetes }}" == prerelease ]]; then
+            version=$(curl -fsSL https://dl.k8s.io/release/latest.txt)
+            kind build node-image --type release "$version" --image "kindest/node:$version"
+          else
+            version=${{ matrix.kubernetes }}
+          fi
+          echo "image=kindest/node:$version" >> "$GITHUB_OUTPUT"
+      - run: scripts/e2e.sh "${{ steps.node.outputs.image }}"
+        env:
+          IMAGE: ${{ env.IMAGE }}:e2e
+
+  # Native builds per architecture (no emulation), pushed to GHCR by digest tag.
+  image:
+    if: github.event_name == 'push'
+    needs: [lint, msrv, coverage, deny, e2e]
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - run: |
+          docker build --tag "$IMAGE:sha-${GITHUB_SHA::12}-${{ matrix.arch }}" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" .
+          docker push "$IMAGE:sha-${GITHUB_SHA::12}-${{ matrix.arch }}"
+
+  # Multi-architecture manifest under the release tags.
+  publish:
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Create and push the manifest list
+        run: |
+          sha="sha-${GITHUB_SHA::12}"
+          tags=(--tag "$IMAGE:$sha")
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then tags+=(--tag "$IMAGE:latest"); fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then tags+=(--tag "$IMAGE:${GITHUB_REF_NAME#v}"); fi
+          docker buildx imagetools create "${tags[@]}" "$IMAGE:$sha-amd64" "$IMAGE:$sha-arm64"
+          docker buildx imagetools inspect "$IMAGE:$sha"

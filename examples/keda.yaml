@@ -1,0 +1,19 @@
+# KEDA scales the worker on queue length; the TimeBasedAutoscaler manages the
+# ScaledObject's minReplicaCount, keeping workers warm before the daily rush
+# and allowing scale to zero at weekends.
+apiVersion: tba.alexandernicholson.github.io/v1alpha1
+kind: TimeBasedAutoscaler
+metadata:
+  name: worker
+spec:
+  scaleTargetRef:
+    apiVersion: keda.sh/v1alpha1
+    kind: ScaledObject
+    name: worker
+  minReplicas: 0
+  schedules:
+    - name: weekdays
+      days: [Monday, Tuesday, Wednesday, Thursday, Friday]
+      start: "06:00"
+      end: "22:00"
+      minReplicas: 4

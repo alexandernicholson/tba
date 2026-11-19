@@ -1,0 +1,43 @@
+# The HPA scales on CPU between minReplicas and maxReplicas; the
+# TimeBasedAutoscaler moves the HPA's minReplicas so CPU-driven scaling can
+# only go above the time-based floor.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2
+  maxReplicas: 50
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: tba.alexandernicholson.github.io/v1alpha1
+kind: TimeBasedAutoscaler
+metadata:
+  name: api
+spec:
+  scaleTargetRef:
+    apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    name: api
+  minReplicas: 2
+  schedules:
+    - name: morning-peak
+      days: [Monday, Tuesday, Wednesday, Thursday, Friday]
+      start: "07:30"
+      end: "10:00"
+      minReplicas: 20
+    - name: business-hours
+      days: [Monday, Tuesday, Wednesday, Thursday, Friday]
+      start: "10:00"
+      end: "18:00"
+      minReplicas: 8

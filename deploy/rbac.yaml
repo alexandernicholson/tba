@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tba-controller
+---
+# Aggregated role bound to the controller. Grant access to additional scale
+# targets (custom resources with a scale subresource) by creating a ClusterRole
+# labelled tba.alexandernicholson.github.io/aggregate-to-controller: "true".
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tba-controller
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        tba.alexandernicholson.github.io/aggregate-to-controller: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tba-controller-core
+  labels:
+    tba.alexandernicholson.github.io/aggregate-to-controller: "true"
+rules:
+  - apiGroups: ["tba.alexandernicholson.github.io"]
+    resources: ["timebasedautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["tba.alexandernicholson.github.io"]
+    resources: ["timebasedautoscalers/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tba-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tba-controller
+subjects:
+  - kind: ServiceAccount
+    name: tba-controller
+    namespace: tba-system
+---
+# Leader election lease, scoped to the controller namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tba-leader-election
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tba-leader-election
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tba-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: tba-controller
+    namespace: tba-system
+---
+# User-facing roles, aggregated into the built-in view/edit/admin roles.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tba-view
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups: ["tba.alexandernicholson.github.io"]
+    resources: ["timebasedautoscalers", "timebasedautoscalers/status"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tba-edit
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+  - apiGroups: ["tba.alexandernicholson.github.io"]
+    resources: ["timebasedautoscalers"]
+    verbs: ["create", "delete", "deletecollection", "patch", "update"]

@@ -1,0 +1,23 @@
+# Raise a Deployment to 10 replicas during business hours and 3 overnight
+# batch processing; 2 at all other times. Replicas scaled above the floor by
+# anyone else are left untouched.
+apiVersion: tba.alexandernicholson.github.io/v1alpha1
+kind: TimeBasedAutoscaler
+metadata:
+  name: web
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web
+  minReplicas: 2
+  schedules:
+    - name: business-hours
+      days: [Monday, Tuesday, Wednesday, Thursday, Friday]
+      start: "08:00"
+      end: "18:00"
+      minReplicas: 10
+    - name: nightly-batch
+      start: "23:00"
+      end: "02:00"
+      minReplicas: 3
