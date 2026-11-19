@@ -134,8 +134,8 @@ jobs:
       - run: docker load --input /tmp/image.tar
       - name: Install kind
         run: |
-          curl -fsSLo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
-          chmod +x /usr/local/bin/kind
+          curl -fsSLo /tmp/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
       - name: Resolve node image
         id: node
         run: |

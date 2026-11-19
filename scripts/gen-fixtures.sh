@@ -16,7 +16,7 @@ awk -v count="$count" -v format="$format" 'BEGIN {
       printf "\"spec\":{\"scaleTargetRef\":{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"name\":\"app-%d\"},", i
       printf "\"minReplicas\":%d,\"schedules\":[", 1 + i % 3
     } else {
-      printf -- "---\napiVersion: tba.alexandernicholson.github.io/v1alpha1\nkind: TimeBasedAutoscaler\n"
+      printf "---\napiVersion: tba.alexandernicholson.github.io/v1alpha1\nkind: TimeBasedAutoscaler\n"
       printf "metadata:\n  name: app-%d\n  namespace: team-%d\n", i, i % 50
       printf "spec:\n  scaleTargetRef:\n    apiVersion: apps/v1\n    kind: Deployment\n    name: app-%d\n", i
       printf "  minReplicas: %d\n  schedules:\n", 1 + i % 3
